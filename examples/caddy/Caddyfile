@@ -1,0 +1,4 @@
+# Caddy gets the HTTPS certificate automatically.
+clstats.example.com {
+	reverse_proxy 127.0.0.1:8080
+}

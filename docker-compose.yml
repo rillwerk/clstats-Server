@@ -1,0 +1,14 @@
+# ClStats Server – minimal setup. Put a reverse proxy with HTTPS in front of it
+# (see README and examples/), the app needs an https:// address on the go.
+services:
+  clstats:
+    image: ghcr.io/rillwerk/clstats-server:1
+    # or build from this folder:  build: .
+    container_name: clstats
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+    ports:
+      # Only reachable from this machine; your reverse proxy forwards to it.
+      - "127.0.0.1:8080:8080"

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClStats Server – Privacy</title>
+<style>
+  :root { color-scheme: light dark; --bg:#FAF9F5; --text:#1f1e1d; --muted:#6f6b64; --accent:#D97757; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#262624; --text:#ece9e2; --muted:#a19d95; --accent:#E08A6C; } }
+  body { margin:0; font:15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:720px; margin:0 auto; padding:24px 16px 40px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:24px 0 6px; }
+  a { color:var(--accent); }
+  .muted { color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+<h1>ClStats Server – what this server stores</h1>
+<p class="muted">This is a self-hosted ClStats server. Whoever runs it is responsible for it; it is not operated by the developer of the ClStats app.</p>
+
+<h2>Stored data</h2>
+<ul>
+<li>The claude.ai session cookie sent by the ClStats app, encrypted at rest with the server's secret key.</li>
+<li>Usage samples read from claude.ai every few minutes: percentages and reset times of the plan limits.</li>
+<li>Optional: token totals per day, project and model sent by the token script (counts only, no content).</li>
+<li>Optional: push tokens of devices, only if push notifications are configured on this server.</li>
+</ul>
+<h2>Connections</h2>
+<p>The server talks only to claude.ai (and, if configured, to Apple's push service). It loads no third-party content, sets no cookies and has no tracking or analytics.</p>
+<h2>Deletion</h2>
+<p>"Sign Out" in the app removes the cookie. Deleting the server's data volume removes everything else. Ending the session on claude.ai makes a stored cookie useless.</p>
+
+<h1 lang="de">Deutsch</h1>
+<div lang="de">
+<p class="muted">Dies ist ein selbst betriebener ClStats-Server. Verantwortlich ist, wer ihn betreibt – nicht der Entwickler der App ClStats.</p>
+<p>Gespeichert werden: das Sitzungs-Cookie von claude.ai (verschlüsselt), Messwerte der Nutzungslimits (Prozent und Reset-Zeiten), optional Token-Summen pro Tag, Projekt und Modell (nur Zähler, keine Inhalte) und optional Push-Tokens von Geräten. Der Server spricht nur mit claude.ai (und ggf. Apples Push-Dienst), setzt keine Cookies und hat kein Tracking. „Abmelden“ in der App löscht das Cookie, das Löschen des Daten-Volumes alles Übrige.</p>
+</div>
+</main>
+</body>
+</html>

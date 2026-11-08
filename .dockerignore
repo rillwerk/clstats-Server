@@ -1,0 +1,12 @@
+tests
+__pycache__
+*.pyc
+.pytest_cache
+data
+scripts
+examples
+.github
+*.md
+docker-compose.yml
+.env
+.env.*

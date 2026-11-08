@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClStats Server</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23E08A6C'/%3E%3Cstop offset='1' stop-color='%23C15F3C'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Ccircle cx='32' cy='32' r='17' fill='none' stroke='%23fff' stroke-opacity='.3' stroke-width='6'/%3E%3Ccircle cx='32' cy='32' r='17' fill='none' stroke='%23fff' stroke-width='6' stroke-linecap='round' stroke-dasharray='74.8 106.8' transform='rotate(-90 32 32)'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#FAF9F5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#262624" media="(prefers-color-scheme: dark)">
+<style>
+  :root { color-scheme: light dark;
+          --bg:#FAF9F5; --card:#fff; --text:#1f1e1d; --muted:#6f6b64; --line:#ebe8e0; --track:#efe9e2;
+          --accent:#D97757; --warn:#E0662A; --bad:#C8382B; --radius:16px; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#262624; --card:#30302e; --text:#ece9e2; --muted:#a19d95; --line:#3d3d3a; --track:#45403b;
+            --accent:#E08A6C; --warn:#F07A3E; --bad:#E5534B; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--text);
+         -webkit-font-smoothing:antialiased; }
+  main { max-width:1000px; margin:0 auto; padding:12px 16px 24px; }
+  header { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin:6px 0 2px; }
+  h1 { font-size:20px; margin:0; letter-spacing:-.01em; display:flex; align-items:center; gap:8px; }
+  h1::before { content:""; width:12px; height:12px; border-radius:50%; border:3px solid var(--accent); border-left-color:transparent; transform:rotate(45deg); }
+  h2 { font-size:14px; font-weight:600; margin:0 0 8px; }
+  .muted { color:var(--muted); font-size:12px; }
+  .grid { display:grid; gap:10px; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); margin-top:10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; }
+  .bar { height:6px; background:var(--track); border-radius:3px; position:relative; margin:6px 0; }
+  .bar > i { position:absolute; inset:0 auto 0 0; border-radius:3px; background:var(--accent); }
+  .bar > i.warn { background:var(--warn); } .bar > i.bad { background:var(--bad); }
+  .bar > b { position:absolute; top:-3px; width:2px; height:12px; border-radius:1px; background:var(--text); opacity:.45; }
+  .big { font-size:24px; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-.02em; line-height:1.1; }
+  .pill { font-size:11px; font-weight:600; padding:1px 7px; border-radius:10px; }
+  .ok { color:var(--accent); background:color-mix(in srgb, var(--accent) 15%, transparent); }
+  .tight { color:var(--warn); background:color-mix(in srgb, var(--warn) 15%, transparent); }
+  .limit_before_reset, .limit_reached { color:var(--bad); background:color-mix(in srgb, var(--bad) 15%, transparent); }
+  .idle { color:var(--muted); background:var(--track); }
+  .heat { display:grid; grid-template-columns:24px repeat(24, 1fr); gap:2px; font-size:10px; }
+  .heat div { aspect-ratio:1; border-radius:3px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  #summary .row { padding:3px 0; border-bottom:1px solid var(--line); } #summary .row:last-child { border:0; }
+  #summary b { font-variant-numeric:tabular-nums; }
+  select, input, button { font:inherit; font-size:13px; padding:5px 10px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); }
+  button { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
+  a { color:var(--accent); }
+  #login { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>ClStats Server</h1><div class="muted" id="updated">Lade…</div></header>
+
+  <div class="card" id="login" style="margin-top:10px">
+    <h2>API-Token</h2>
+    <div class="row"><input id="token" type="password" placeholder="API_TOKEN" style="flex:1"><button id="save">Speichern</button></div>
+  </div>
+
+  <div class="grid" id="limits"></div>
+
+  <div class="card" style="margin-top:10px">
+    <div class="row" style="justify-content:space-between">
+      <h2>Verlauf</h2>
+      <div class="row">
+        <select id="hkey"><option value="five_hour">Session</option><option value="seven_day">Woche</option></select>
+        <select id="hrange"><option value="24">24 h</option><option value="168">7 Tage</option><option value="720">30 Tage</option><option value="2160">90 Tage</option></select>
+      </div>
+    </div>
+    <canvas id="history" height="110"></canvas>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h2>Wochenverbrauch pro Tag (30 Tage)</h2><canvas id="daily" height="160"></canvas></div>
+    <div class="card"><h2>Zusammenfassung (30 Tage)</h2><div id="summary"></div></div>
+  </div>
+
+  <div class="card" style="margin-top:10px">
+    <h2>Wann du Claude nutzt (Session-Verbrauch, 4 Wochen)</h2>
+    <div class="heat" id="heat"></div>
+  </div>
+  <p class="muted"><a href="#" id="csv">CSV exportieren</a></p>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const store = { get(){ try { return localStorage.getItem('token') || ''; } catch { return ''; } },
+                set(v){ try { localStorage.setItem('token', v); } catch {} } };
+let token = store.get();
+const charts = {};
+const fmtTime = ts => new Date(ts * 1000).toLocaleString('de-DE', { weekday:'short', hour:'2-digit', minute:'2-digit' });
+const statusText = { ok:'reicht', tight:'knapp', limit_before_reset:'Limit vor Reset', limit_reached:'Limit erreicht', idle:'inaktiv' };
+
+async function api(path) {
+  const r = await fetch(path, { headers: { Authorization: 'Bearer ' + token } });
+  if (r.status === 401) { $('login').style.display = 'block'; throw new Error('401'); }
+  return r.json();
+}
+
+// Same thresholds as the app: warning from 80 %, critical from 95 % or when the forecast says so.
+function level(l) {
+  if (l.utilization >= 95 || l.status === 'limit_before_reset' || l.status === 'limit_reached') return 'bad';
+  if (l.utilization >= 80 || l.status === 'tight') return 'warn';
+  return '';
+}
+
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function chart(id, cfg) {
+  charts[id]?.destroy();
+  cfg.options = Object.assign({ responsive:true, plugins:{ legend:{ display:false } },
+    scales:{ y:{ min:0, ticks:{ color:css('--muted') }, grid:{ color:css('--line') } },
+             x:{ ticks:{ color:css('--muted'), maxTicksLimit:8 }, grid:{ display:false } } } }, cfg.options || {});
+  charts[id] = new Chart($(id), cfg);
+}
+
+async function loadCurrent() {
+  const c = await api('/api/current');
+  const st = c.status;
+  $('updated').textContent = (c.updated_at ? 'Stand ' + fmtTime(c.updated_at) : 'Noch keine Daten')
+    + (st.error ? ' · Fehler: ' + (st.error_detail || st.error) : '');
+  $('limits').innerHTML = c.limits.map(l => `
+    <div class="card">
+      <div class="row" style="justify-content:space-between"><h2 style="margin:0">${l.label}</h2>
+        <span class="pill ${l.status}">${statusText[l.status] || l.status}</span></div>
+      <div class="big">${Math.round(l.utilization)} %</div>
+      <div class="bar"><i class="${level(l)}" style="width:${Math.min(100, l.utilization)}%"></i>${l.pace != null ? `<b style="left:${l.pace}%"></b>` : ''}</div>
+      <div class="muted">${l.resets_at ? 'Reset ' + fmtTime(l.resets_at) : 'kein aktives Fenster'}
+        ${l.rate_per_hour > 0 ? ' · ' + l.rate_per_hour.toFixed(1) + ' %/h' : ''}
+        ${l.limit_eta && l.status !== 'ok' ? ' · Limit ca. ' + fmtTime(l.limit_eta) : ''}</div>
+    </div>`).join('');
+}
+
+async function loadHistory() {
+  const h = await api(`/api/history?key=${$('hkey').value}&hours=${$('hrange').value}`);
+  chart('history', { type:'line', data:{ labels:h.points.map(p => fmtTime(p.ts)),
+    datasets:[{ data:h.points.map(p => p.utilization), borderColor:css('--accent'), borderWidth:2, pointRadius:0, tension:.3,
+      fill:true, backgroundColor:css('--accent') + '22' }] },
+    options:{ scales:{ y:{ min:0, max:100 } } } });
+}
+
+async function loadDaily() {
+  const d = await api('/api/daily?key=seven_day&days=30');
+  chart('daily', { type:'bar', data:{ labels:d.days.map(x => x.date.slice(5)),
+    datasets:[{ data:d.days.map(x => x.consumed), backgroundColor:css('--accent'), borderRadius:3, maxBarThickness:18 }] } });
+}
+
+async function loadSummary() {
+  const s = await api('/api/summary?days=30');
+  const rows = [
+    ['Sessions', s.sessions], ['Davon am Limit', s.sessions_hit_limit],
+    ['Ø Session-Spitze', s.avg_session_peak != null ? s.avg_session_peak + ' %' : '–'],
+    ['Aktive Tage', s.active_days],
+    ['Ø Wochenverbrauch je aktivem Tag', s.avg_weekly_per_active_day != null ? s.avg_weekly_per_active_day + ' %' : '–'],
+    ['Stärkster Tag', s.busiest_day ? `${s.busiest_day.date} (${s.busiest_day.consumed} %)` : '–'],
+  ];
+  $('summary').innerHTML = rows.map(([k, v]) => `<div class="row" style="justify-content:space-between"><span class="muted">${k}</span><b>${v}</b></div>`).join('');
+}
+
+async function loadHeat() {
+  const h = await api('/api/heatmap?key=five_hour&days=28');
+  const max = Math.max(1, ...h.cells.map(c => c.consumed));
+  const val = {}; h.cells.forEach(c => val[c.weekday + ':' + c.hour] = c.consumed);
+  const days = ['Mo','Di','Mi','Do','Fr','Sa','So'];
+  let html = '<span></span>' + Array.from({ length:24 }, (_, i) => `<span class="muted">${i % 3 ? '' : i}</span>`).join('');
+  days.forEach((d, w) => {
+    html += `<span class="muted">${d}</span>`;
+    for (let hr = 0; hr < 24; hr++) {
+      const v = val[w + ':' + hr] || 0;
+      html += `<div title="${d} ${hr}:00 – ${v.toFixed(1)} %" style="background:${v ? css('--accent') : css('--track')};opacity:${v ? .25 + .75 * v / max : 1}"></div>`;
+    }
+  });
+  $('heat').innerHTML = html;
+}
+
+async function loadAll() {
+  if (!token) { $('login').style.display = 'block'; $('updated').textContent = ''; return; }
+  $('login').style.display = 'none';
+  try { await Promise.all([loadCurrent(), loadHistory(), loadDaily(), loadSummary(), loadHeat()]); } catch (e) { console.warn(e); }
+}
+
+$('save').onclick = () => { token = $('token').value.trim(); store.set(token); loadAll(); };
+$('hkey').onchange = $('hrange').onchange = () => loadHistory().catch(() => {});
+$('csv').onclick = e => { e.preventDefault(); location.href = '/api/export.csv?access_token=' + encodeURIComponent(token); };
+loadAll();
+setInterval(() => loadCurrent().catch(() => {}), 60000);
+</script>
+</body>
+</html>

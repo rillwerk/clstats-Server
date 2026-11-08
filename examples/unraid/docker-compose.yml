@@ -1,0 +1,16 @@
+# Example for Unraid with the SWAG reverse proxy (Compose Manager plugin).
+# The container runs as nobody:users (99:100), like other Unraid apps.
+services:
+  clstats:
+    image: ghcr.io/rillwerk/clstats-server:1
+    container_name: clstats
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - /mnt/user/appdata/clstats:/data
+    networks:
+      - proxynet
+
+networks:
+  proxynet:
+    external: true   # the network SWAG is attached to; rename if yours differs
