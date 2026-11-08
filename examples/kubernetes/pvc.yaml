@@ -1,0 +1,14 @@
+# Holds the SQLite database and, if SECRET_KEY is not set, the generated key.
+# A few MB per year; 1Gi is plenty. Uses the cluster's default StorageClass
+# (k3s: local-path). ReadWriteOnce is enough because only one pod runs.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: clstats-data
+  namespace: clstats
+spec:
+  accessModes: ["ReadWriteOnce"]
+  # storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi

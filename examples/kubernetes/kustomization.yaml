@@ -1,0 +1,13 @@
+# kubectl apply -k examples/kubernetes
+# Before applying: set the token in secret.yaml (or remove it below and create the secret
+# with kubectl, see secret.yaml) and your host name in ingress.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: clstats
+resources:
+  - namespace.yaml
+  - secret.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml

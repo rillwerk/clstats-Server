@@ -1,0 +1,29 @@
+# HTTPS for the app on the go. Replace clstats.example.com with your host name.
+# The TLS secret comes from cert-manager (uncomment the annotation and name your issuer)
+# or create it yourself: kubectl -n clstats create secret tls clstats-tls --cert=... --key=...
+# If you add an extra login in front (e.g. oauth2-proxy, Authelia), keep /api/ and /privacy
+# reachable without it: the app cannot do such a login and sends its token instead.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: clstats
+  namespace: clstats
+  # annotations:
+  #   cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  # ingressClassName: traefik    # k3s default; nginx for ingress-nginx
+  tls:
+    - hosts:
+        - clstats.example.com
+      secretName: clstats-tls
+  rules:
+    - host: clstats.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: clstats
+                port:
+                  name: http

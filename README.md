@@ -57,9 +57,37 @@ clstats.example.com {
 }
 ```
 
-More examples: `examples/swag` (nginx/SWAG), `examples/unraid` (Unraid with SWAG).
+More examples: `examples/swag` (nginx/SWAG), `examples/unraid` (Unraid with SWAG),
+`examples/kubernetes` (see below).
 If you put the dashboard behind an extra login (e.g. Authelia), keep `/api/` and
 `/privacy` reachable without it: the app cannot do such a login and uses its token instead.
+
+## Kubernetes
+
+`examples/kubernetes` has plain manifests (no Helm) with a `kustomization.yaml`:
+namespace, secret, PersistentVolumeClaim, Deployment, Service and an Ingress with TLS.
+
+```sh
+git clone https://github.com/rillwerk/clstats-server.git && cd clstats-server/examples/kubernetes
+kubectl create namespace clstats
+kubectl -n clstats create secret generic clstats --from-literal=API_TOKEN="$(openssl rand -hex 32)"
+# remove "- secret.yaml" from kustomization.yaml (or put the token into secret.yaml instead),
+# set your host name in ingress.yaml, then:
+kubectl apply -k .
+kubectl -n clstats rollout status deploy/clstats
+kubectl -n clstats port-forward svc/clstats 8080:80   # curl http://127.0.0.1:8080/api/health
+```
+
+- **One replica only.** The data lives in SQLite and the server polls claude.ai itself;
+  the Deployment uses `replicas: 1` and `strategy: Recreate`. Do not scale it up.
+- **A PersistentVolumeClaim is required** for `/data` (database and generated key).
+  Use a local or block volume (ReadWriteOnce); SQLite does not work reliably on NFS.
+- **HTTPS through the Ingress.** Set the host name and a TLS secret, e.g. with cert-manager
+  (annotation prepared as a comment). The app needs an `https://` address on the go.
+- The pod runs as uid 99 / gid 100 with a read-only root filesystem, no capabilities and
+  a writable `emptyDir` for `/tmp`. `TZ` and `POLL_INTERVAL` are set in `deployment.yaml`.
+- **k3s:** works as is with the built-in Traefik ingress and the `local-path` storage
+  class; uncomment `ingressClassName: traefik` if your cluster has several ingress classes.
 
 ## Connect the app
 
