@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import socket
 import ssl
 import sys
@@ -30,7 +31,7 @@ CACHE = (
     Path.home() / "Library" / "Caches" if sys.platform == "darwin"
     else Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
 ) / "claude-usage" / "tokens-cache.json"
-CACHE_VERSION = 4
+CACHE_VERSION = 5
 SLOT = 15 * 60  # seconds; the server shows 1 h / 6 h / 24 h from these slots
 
 
@@ -142,14 +143,82 @@ def session_project(folder: Path) -> str:
     return folder.name.rsplit("-", 1)[-1] or NO_PROJECT
 
 
+_PATH_KEYS = ("file_path", "path", "notebook_path")
+# Absolute paths (also ~/... and $HOME/...) in a shell command, and the target of a cd.
+_ABS_PATH = re.compile(r"""(?:^|[\s'"=:(])((?:~|\$HOME|\$\{HOME\})?/[^\s'"`;|&<>()]+)""")
+_CD = re.compile(r"""(?:^|[;&|(]|\s)cd\s+['"]?([^\s'"`;|&<>()]+)""")
+
+
+def _expand(p: str, cwd: str | None) -> Path | None:
+    home = str(Path.home())
+    for prefix in ("~", "$HOME", "${HOME}"):
+        if p == prefix or p.startswith(prefix + "/"):
+            p = home + p[len(prefix):]
+            break
+    if not p.startswith("/"):
+        if not cwd or p.startswith("-") or "$" in p:
+            return None
+        p = os.path.join(cwd, p)
+    return Path(os.path.normpath(p))
+
+
+def tool_paths(msg: dict, cwd: str | None) -> list[Path]:
+    """Paths a message's tool calls work on: file_path/path/notebook_path, and in shell
+    commands the absolute paths and cd targets (relative ones against cwd)."""
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return []
+    found: list[Path] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        args = block.get("input")
+        if not isinstance(args, dict):
+            continue
+        for k in _PATH_KEYS:
+            v = args.get(k)
+            if isinstance(v, str) and v:
+                p = _expand(v, cwd)
+                if p:
+                    found.append(p)
+        cmd = args.get("command")
+        if isinstance(cmd, str):
+            for m in _CD.finditer(cmd):
+                p = _expand(m.group(1), cwd)
+                if p:
+                    found.append(p)
+            for m in _ABS_PATH.finditer(cmd):
+                p = _expand(m.group(1), cwd)
+                if p:
+                    found.append(p)
+    return found
+
+
+def path_project(path: Path) -> str | None:
+    """Project of a path a tool touched, only below a project root (the first folder
+    there, then the repository logic of project_name)."""
+    for root in project_roots():
+        try:
+            rel = path.relative_to(root)
+        except ValueError:
+            continue
+        if not rel.parts or rel.parts[0].startswith("."):
+            return None
+        # Only existing project folders: a relative path joined with a stale cwd, a glob
+        # or a file in the root itself (~/Projects/ios, ~/Projects/x*, ~/Projects/a.md) is none.
+        if not (root / rel.parts[0]).is_dir():
+            return None
+        # Up to three levels are enough to find the repository; keeps the name cache small.
+        return project_name(str(root.joinpath(*rel.parts[:3])))
+    return None
+
+
 def parse_file(path: Path, folder: Path) -> dict[str, list]:
     """message key -> [slot, date, project, model, input, output, cache_write, cache_write_1h, cache_read]."""
     out: dict[str, list] = {}
+    # message key -> project named by the message itself (cwd, else the paths its tools use)
+    named: dict[str, str] = {}
     cwd = None
-    # The shell's working directory moves around (cd .secrets, cd ios ...). A message only
-    # switches the session's project when its folder names a project; otherwise it stays
-    # with the last one, and before the first one with the session's start folder.
-    project: str | None = None
     with path.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
             if '"usage"' not in line:
@@ -178,15 +247,25 @@ def parse_file(path: Path, folder: Path) -> dict[str, list]:
                 continue
             slot = int(when.timestamp()) // SLOT * SLOT
             day = datetime.fromtimestamp(slot).date().isoformat()
-            project = project_name(cwd) or project
             # A streamed answer is logged once per content block with the same counters,
             # and resumed sessions copy earlier messages: count each message once.
             key = f"{msg.get('id') or entry.get('uuid')}:{entry.get('requestId') or ''}"
+            if key not in named:
+                name = project_name(cwd)
+                if name is None:
+                    # Sessions started in the project root (~/Projects) often work there with
+                    # absolute paths: the folders the tools touch name the project.
+                    for p in tool_paths(msg, cwd):
+                        name = path_project(p)
+                        if name:
+                            break
+                if name:
+                    named[key] = name
             created = usage.get("cache_creation") or {}
             row = [
                 slot,
                 day,
-                project or session_project(folder),
+                None,
                 model,
                 int(usage.get("input_tokens") or 0),
                 int(usage.get("output_tokens") or 0),
@@ -196,6 +275,16 @@ def parse_file(path: Path, folder: Path) -> dict[str, list]:
             ]
             prev = out.get(key)
             out[key] = row if prev is None else prev[:4] + [max(a, b) for a, b in zip(prev[4:], row[4:])]
+
+    # The working directory moves around (cd .secrets, cd ios ...). A message only switches
+    # the session's project when it names one; otherwise it stays with the last one. Messages
+    # before the first named project belong to that first project; a session that never
+    # names one falls back to its log folder.
+    first = next((named[k] for k in out if k in named), None) or session_project(folder)
+    project = first
+    for key, row in out.items():
+        project = named.get(key) or project
+        row[2] = project
     return out
 
 
