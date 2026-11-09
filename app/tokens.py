@@ -52,20 +52,25 @@ def price_for(model: str) -> tuple[float, float, float] | None:
     return best[1:] if best else None
 
 
-def cost(model: str, t: dict) -> float | None:
+def cost_parts(model: str, t: dict) -> dict[str, float] | None:
+    """Estimated cost per token type: input, output, cache_write (5 min and 1 h), cache_read."""
     p = price_for(model)
     if p is None:
         return None
     inp, out, read = p
     cw1h = t.get("cache_write_1h", 0)
     cw5 = max(0, t.get("cache_write", 0) - cw1h)
-    return (
-        t.get("input", 0) * inp
-        + t.get("output", 0) * out
-        + cw5 * inp * 1.25
-        + cw1h * inp * 2.0
-        + t.get("cache_read", 0) * read
-    ) / 1_000_000
+    return {
+        "input": t.get("input", 0) * inp / 1_000_000,
+        "output": t.get("output", 0) * out / 1_000_000,
+        "cache_write": (cw5 * inp * 1.25 + cw1h * inp * 2.0) / 1_000_000,
+        "cache_read": t.get("cache_read", 0) * read / 1_000_000,
+    }
+
+
+def cost(model: str, t: dict) -> float | None:
+    parts = cost_parts(model, t)
+    return None if parts is None else sum(parts.values())
 
 
 _VERSIONED = re.compile(r"^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$")
@@ -186,6 +191,31 @@ def report(rows: list[TokenRow], bucket: Callable[[TokenRow], int], **meta) -> d
         models.append(model_entry(model, acc))
     models.sort(key=sort_key)
 
+    # Detail per model: its projects, its bars and the cost per token type.
+    model_series: dict[str, dict[int, dict]] = defaultdict(lambda: defaultdict(_empty))
+    for (project, start, model), t in pbm.items():
+        acc = model_series[model][start]
+        for f in FIELDS:
+            acc[f] += t[f]
+
+    by_model_detail = []
+    for entry in models:
+        model = entry["model"]
+        parts = cost_parts(model, entry)
+        projs = sorted(
+            ({"project": p, **_finish(t, [cost(model, t)])} for (p, m), t in pm.items() if m == model),
+            key=sort_key,
+        )
+        series = [
+            {"start": b, **_finish(t, [cost(model, t)])} for b, t in sorted(model_series[model].items())
+        ]
+        by_model_detail.append({
+            **entry,
+            "costs": {k: round(v, 4) for k, v in parts.items()} if parts else None,
+            "projects": projs,
+            "series": series,
+        })
+
     grand = _empty()
     for t in pm.values():
         for f in FIELDS:
@@ -197,6 +227,7 @@ def report(rows: list[TokenRow], bucket: Callable[[TokenRow], int], **meta) -> d
         "total": total,
         "projects": projects,
         "models": models,
+        "by_model": by_model_detail,
         "daily": [{"date": d, **v} for d, v in sorted(rollup(all_daily).items())],
         "series": [{"start": b, **v} for b, v in sorted(rollup(all_series).items())],
     }

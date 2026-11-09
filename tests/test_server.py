@@ -318,3 +318,41 @@ def test_load_settings_requires_long_token_and_generates_secret(tmp_path, monkey
     monkeypatch.setenv("SECRET_KEY", "not-a-key")
     with pytest.raises(RuntimeError):
         load_settings()
+
+
+def test_tokens_by_model_detail(setup):
+    from datetime import datetime
+
+    from app import tokens
+
+    client, _ = setup
+    slot = int(datetime.now().timestamp()) // 900 * 900 - 900
+    day = datetime.fromtimestamp(slot).date().isoformat()
+    row = lambda p, m, n, s=slot: {
+        "slot_start": s, "date": day, "project": p, "model": m, "input": n, "output": n,
+        "cache_write": 2 * n, "cache_write_1h": n, "cache_read": 10 * n, "messages": 1,
+    }
+    rows = [
+        row("alpha", "claude-fable-5-1", 1000),
+        row("beta", "claude-fable-5-1", 3000, slot - 3600),
+        row("alpha", "claude-opus-5-5", 500),
+    ]
+    client.post("/api/tokens", json={"source": "mac", "rows": rows})
+    r = client.get("/api/tokens", params={"hours": 24}).json()
+    # Existing fields stay as they were for older app builds.
+    assert {"total", "projects", "models", "daily", "series", "sources"} <= r.keys()
+    assert [m["model"] for m in r["models"]] == [m["model"] for m in r["by_model"]]
+    fable = r["by_model"][0]
+    assert fable["name"] == "Fable 5.1"
+    assert fable["total"] == 4000 * 14
+    assert [p["project"] for p in fable["projects"]] == ["beta", "alpha"]
+    assert fable["projects"][0]["total"] == 3000 * 14
+    assert len(fable["series"]) == 2 and sum(b["total"] for b in fable["series"]) == fable["total"]
+    c = fable["costs"]
+    assert c["input"] == pytest.approx(4000 * 10 / 1e6)
+    assert c["output"] == pytest.approx(4000 * 50 / 1e6)
+    # 4000 written for 5 minutes (1.25x) and 4000 for one hour (2x)
+    assert c["cache_write"] == pytest.approx(4000 * 10 * (1.25 + 2.0) / 1e6)
+    assert c["cache_read"] == pytest.approx(40000 * 0.25 / 1e6)
+    assert sum(c.values()) == pytest.approx(fable["cost"], abs=1e-3)
+    assert tokens.cost("claude-fable-5-1", fable) == pytest.approx(fable["cost"], abs=1e-3)
