@@ -5,7 +5,8 @@ Reads the session logs Claude Code writes on this Mac (~/.claude/projects/**/*.j
 only the token counters, never message contents. Only the totals leave the Mac.
 
 Config: ~/.config/claude-usage/config with SERVER_URL=... and API_TOKEN=...
-(install.sh writes it), or the same names as environment variables.
+(install.sh writes it), or the same names as environment variables. Behind Cloudflare
+Access also CF_ACCESS_CLIENT_ID=... and CF_ACCESS_CLIENT_SECRET=... (service token).
 
   python3 claude_tokens.py            send to the server
   python3 claude_tokens.py --dry-run  print the totals instead
@@ -358,7 +359,7 @@ def load_config() -> dict[str, str]:
                 cfg[k.strip()] = v.strip().strip('"').strip("'")
     except OSError:
         pass
-    for k in ("SERVER_URL", "API_TOKEN", "SOURCE_NAME"):
+    for k in ("SERVER_URL", "API_TOKEN", "SOURCE_NAME", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"):
         if os.environ.get(k):
             cfg[k] = os.environ[k]
     return cfg
@@ -392,10 +393,12 @@ def send(rows: list[dict], cfg: dict[str, str]) -> None:
         # whose logs Claude Code already deleted, stay on the server.
         payload["replace_from"] = min(r["slot_start"] for r in rows)
     body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        url, data=body, method="POST",
-        headers={"Authorization": f"Bearer {cfg['API_TOKEN']}", "Content-Type": "application/json"},
-    )
+    headers = {"Authorization": f"Bearer {cfg['API_TOKEN']}", "Content-Type": "application/json"}
+    # Optional Cloudflare Access service token, for servers behind Cloudflare Access.
+    if cfg.get("CF_ACCESS_CLIENT_ID") and cfg.get("CF_ACCESS_CLIENT_SECRET"):
+        headers["CF-Access-Client-Id"] = cfg["CF_ACCESS_CLIENT_ID"]
+        headers["CF-Access-Client-Secret"] = cfg["CF_ACCESS_CLIENT_SECRET"]
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     # The python.org build on macOS ships without root certificates; use certifi when present.
     ctx = None
     try:

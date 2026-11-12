@@ -100,6 +100,46 @@ kubectl -n clstats port-forward svc/clstats 8080:80   # curl http://127.0.0.1:80
 If claude.ai blocks requests from your server, the app fetches the data itself whenever
 it is opened and passes it on.
 
+## Cloudflare Access (optional)
+
+If the server is published through Cloudflare (e.g. a Cloudflare Tunnel), you can put it
+behind [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/).
+The app and the token script cannot complete a browser login, so `/api` needs a
+**service token**. Cloudflare checks it at the edge; the server itself needs no changes and
+still requires its `API_TOKEN` as well.
+
+1. **Create a service token.** Zero Trust dashboard → *Access* → *Service Auth* →
+   *Service Tokens* → *Create Service Token*. Copy the **Client ID** and the
+   **Client Secret** (the secret is shown only once).
+2. **Protect `/api` with it.** *Access* → *Applications* → *Add an application* →
+   *Self-hosted*. Domain `clstats.example.com`, path `api`. Add a policy with the action
+   **Service Auth** (not *Allow*: an *Allow* policy answers with a login page) and the
+   rule *Include → Service Token →* your token.
+3. **Web dashboard (optional).** The dashboard at `/` calls `/api` from the browser. To use
+   it, add a second policy with the action *Allow* (e.g. your e-mail address) to the same
+   application, and protect `/` with another application without a path. Requests with a
+   valid service token pass the *Service Auth* policy; browsers get the Access login.
+4. **App:** Settings → *Own Server* → *Cloudflare Access (optional)*: enter Client ID and
+   Client Secret, tap **Save and Test**. Both are kept in the keychain and sent as
+   `CF-Access-Client-Id` / `CF-Access-Client-Secret` with every request to your server.
+5. **Token script (if used):** add to `~/.config/claude-usage/config`
+   ```
+   CF_ACCESS_CLIENT_ID=<client id>
+   CF_ACCESS_CLIENT_SECRET=<client secret>
+   ```
+
+Test from a shell:
+
+```sh
+curl -H "CF-Access-Client-Id: <client id>" -H "CF-Access-Client-Secret: <client secret>" \
+     -H "Authorization: Bearer <API_TOKEN>" https://clstats.example.com/api/current
+```
+
+Without the two headers Cloudflare answers `403` (or redirects to its login page); the app
+then reports that Cloudflare Access blocked the request. Make sure the server is reachable
+only through Cloudflare (a tunnel, or a firewall that admits only Cloudflare), otherwise
+Access can be bypassed.
+
 ## Token totals per project (optional)
 
 claude.ai only reports percentages. Real token counts are in the logs Claude Code writes on
