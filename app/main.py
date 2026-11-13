@@ -61,6 +61,9 @@ class AuthFailures:
     """Slows down token guessing: after too many wrong tokens a client gets 429 for a while.
 
     Per client address, plus a global cap in case addresses are spoofed via X-Forwarded-For.
+    Only wrong tokens are answered with 429: the token has at least 24 characters, so the
+    block is defense in depth, and it must not lock out the owner when a scanner, an old
+    script with a stale token or a shared address (NAT, reverse proxy) runs into it.
     """
 
     def __init__(self, per_client: int = 10, overall: int = 100, window: float = 600):
@@ -79,12 +82,24 @@ class AuthFailures:
                 del self._events[key]
 
     def blocked(self, client: str, now: float | None = None) -> bool:
-        now = now or time.time()
+        now = time.time() if now is None else now
         self._trim(now)
         return len(self._events.get(client, ())) >= self.per_client or len(self._all) >= self.overall
 
+    def retry_after(self, client: str, now: float | None = None) -> int:
+        """Seconds until the block for this client lifts (at least 1)."""
+        now = time.time() if now is None else now
+        self._trim(now)
+        waits = []
+        own = self._events.get(client, [])
+        if len(own) >= self.per_client:
+            waits.append(own[-self.per_client] + self.window - now)
+        if len(self._all) >= self.overall:
+            waits.append(self._all[-self.overall] + self.window - now)
+        return max(1, int(max(waits, default=1)) + 1)
+
     def add(self, client: str, now: float | None = None) -> None:
-        now = now or time.time()
+        now = time.time() if now is None else now
         self._events[client].append(now)
         self._all.append(now)
 
@@ -117,14 +132,19 @@ def create_app(settings: Settings | None = None, collector: Collector | None = N
         access_token: str | None = Query(default=None),
     ) -> None:
         client = request.client.host if request.client else "unknown"
-        if failures.blocked(client):
-            raise HTTPException(status_code=429, detail="too many failed attempts, try again later")
         supplied = access_token
         if authorization and authorization.lower().startswith("bearer "):
             supplied = authorization[7:]
-        if not supplied or not secrets.compare_digest(supplied, settings.api_token):
-            failures.add(client)
-            raise HTTPException(status_code=401, detail="invalid token")
+        if supplied and secrets.compare_digest(supplied, settings.api_token):
+            return
+        if failures.blocked(client):
+            raise HTTPException(
+                status_code=429,
+                detail="too many failed attempts, try again later",
+                headers={"Retry-After": str(failures.retry_after(client))},
+            )
+        failures.add(client)
+        raise HTTPException(status_code=401, detail="invalid token")
 
     def by_key(since: float) -> dict[str, list[Sample]]:
         out: dict[str, list[Sample]] = defaultdict(list)

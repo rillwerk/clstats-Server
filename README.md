@@ -170,8 +170,11 @@ for it. `GET /privacy` shows a short public description. "Sign Out" in the app d
 cookie, deleting the `data` folder deletes everything.
 
 Security notes: all endpoints except `/api/health` and `/privacy` require the token;
-repeated wrong tokens are answered with `429` for a while; manual refreshes are limited to
-one per minute.
+repeated wrong tokens from one address (or more than 100 overall) are answered with `429`
+and a `Retry-After` header for up to 10 minutes, while the correct token keeps working;
+manual refreshes are limited to one per minute. When claude.ai itself answers `429`, the
+server pauses polling (Retry-After, at least the poll interval, doubling up to an hour)
+and reports `status.error = "rate_limited"` with `retry_at`.
 
 ## API
 

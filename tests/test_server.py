@@ -287,8 +287,12 @@ def test_failed_tokens_are_throttled(setup):
     anon = TestClient(client.app)
     for _ in range(10):
         assert anon.get("/api/current", headers={"Authorization": "Bearer wrong"}).status_code == 401
-    # Now blocked, even with the right token, until the window has passed
-    assert anon.get("/api/current", headers={"Authorization": "Bearer t0ken"}).status_code == 429
+    # Further wrong tokens are blocked and told how long to wait ...
+    r = anon.get("/api/current", headers={"Authorization": "Bearer wrong"})
+    assert r.status_code == 429
+    assert 1 <= int(r.headers["Retry-After"]) <= 601
+    # ... but the right token still works, so a scanner cannot lock out the owner
+    assert anon.get("/api/current", headers={"Authorization": "Bearer t0ken"}).status_code == 200
     assert anon.get("/api/health").status_code == 200
 
 
@@ -297,9 +301,41 @@ def test_auth_failures_window():
     f = AuthFailures(per_client=2, overall=3, window=60)
     f.add("a", now=0); f.add("a", now=1)
     assert f.blocked("a", now=2) and not f.blocked("b", now=2)
+    assert f.retry_after("a", now=2) == 59  # the oldest failure (t=0) leaves the window at t=60
     f.add("b", now=3)
     assert f.blocked("c", now=4)  # global cap
     assert not f.blocked("a", now=100)
+
+
+def test_claude_rate_limit_backs_off(setup):
+    from app.claude_client import RateLimited
+    client, collector = setup
+    client.post("/api/credentials", json={"cookie": "sessionKey=sk-ant-test"})
+    FakeClient.fail = RateLimited("claude.ai answered 429", retry_after=900)
+    now = time.time()
+    assert collector.run_once(now) == []
+    status = collector.status()
+    assert status["error"] == "rate_limited" and status["retry_at"] == pytest.approx(now + 900)
+    # No request to claude.ai while waiting, even if it would succeed now
+    FakeClient.fail = None
+    assert collector.run_once(now + 60) == []
+    assert collector.status()["error"] == "rate_limited"
+    assert collector.run_once(now + 901)
+    assert collector.status()["error"] is None and collector.status()["retry_at"] is None
+
+
+def test_claude_429_is_rate_limit_not_blocked():
+    import httpx
+    from app.claude_client import RateLimited
+
+    def handler(request):
+        return httpx.Response(429, headers={"content-type": "text/html", "retry-after": "120"}, text="<html>")
+
+    c = ClaudeClient("sessionKey=x; lastActiveOrg=o")
+    c.session = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(RateLimited) as e:
+        c.usage("o")
+    assert e.value.retry_after == 120
 
 
 def test_load_settings_requires_long_token_and_generates_secret(tmp_path, monkeypatch):

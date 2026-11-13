@@ -34,6 +34,31 @@ class Blocked(ClaudeError):
     """Bot protection answered instead of the API."""
 
 
+class RateLimited(ClaudeError):
+    """claude.ai answered 429; retry_after is the wait it asked for in seconds, if any."""
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def retry_after_seconds(value: str | None) -> float | None:
+    """Retry-After as seconds; accepts the delta-seconds and the HTTP-date form."""
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+
+        return max(0.0, parsedate_to_datetime(value).timestamp() - datetime.now().timestamp())
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass(frozen=True)
 class Reading:
     key: str
@@ -112,6 +137,10 @@ class ClaudeClient:
             timeout=self.timeout,
         )
         ctype = resp.headers.get("content-type", "")
+        if resp.status_code == 429:
+            # Checked before the HTML test: a 429 page from claude.ai's edge is a rate limit,
+            # not bot protection, and must not send every app to claude.ai as a fallback.
+            raise RateLimited("claude.ai answered 429", retry_after_seconds(resp.headers.get("retry-after")))
         if resp.status_code in (401, 403) and "json" in ctype:
             raise SessionExpired(f"claude.ai answered {resp.status_code}")
         if resp.status_code == 403 or "text/html" in ctype:

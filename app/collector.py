@@ -14,7 +14,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from . import analytics
 from .alerts import alerts_for
 from .apns import APNs
-from .claude_client import Blocked, ClaudeClient, ClaudeError, SessionExpired, parse_usage
+from .claude_client import Blocked, ClaudeClient, ClaudeError, RateLimited, SessionExpired, parse_usage
 from .config import Settings
 from .db import Database, Sample
 
@@ -37,6 +37,9 @@ class Collector:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        # After a 429 from claude.ai: no requests before _pause_until, the wait doubles per 429.
+        self._pause_until = 0.0
+        self._backoff = 0.0
 
     # credentials
 
@@ -44,6 +47,7 @@ class Collector:
         self.db.set("cookie", self._fernet.encrypt(cookie.encode()).decode())
         self.db.set("org_id", org_id)
         self.db.set("session_alerted", None)
+        self._pause_until = self._backoff = 0.0
         self._wake.set()
 
     def clear_cookie(self) -> None:
@@ -83,6 +87,8 @@ class Collector:
         if not cookie:
             self._set_status(last_attempt=now, error="not_configured", error_detail="Kein Login hinterlegt")
             return []
+        if now < self._pause_until:
+            return []  # still waiting out a rate limit; the status already says so
         client = self.client_factory(cookie)
         try:
             org = self.db.get("org_id") or client.organization_id()
@@ -93,6 +99,13 @@ class Collector:
             if self.db.get("session_alerted") is None:
                 self.db.set("session_alerted", "1")
                 self._notify("Claude-Login abgelaufen", "Bitte in der App neu bei claude.ai anmelden.")
+            return []
+        except RateLimited as e:
+            self._backoff = min(3600.0, max(float(self.settings.poll_interval), self._backoff * 2))
+            wait = max(e.retry_after or 0.0, self._backoff)
+            self._pause_until = now + wait
+            log.warning("claude.ai rate limit, next attempt in %d s", wait)
+            self._set_status(last_attempt=now, error="rate_limited", error_detail=str(e), retry_at=self._pause_until)
             return []
         except Blocked as e:
             self._set_status(last_attempt=now, error="blocked", error_detail=str(e))
@@ -105,6 +118,7 @@ class Collector:
             self._set_status(last_attempt=now, error="fetch_failed", error_detail=str(e))
             return []
 
+        self._backoff = 0.0
         return self.store(readings, now)
 
     def ingest(self, payload: dict, now: float | None = None) -> list[Sample]:
@@ -117,7 +131,7 @@ class Collector:
             self._set_status(last_attempt=now, error="empty", error_detail="Keine Limits in der Antwort")
             return []
         self.db.add_samples(samples)
-        self._set_status(last_attempt=now, last_success=now, error=None, error_detail=None)
+        self._set_status(last_attempt=now, last_success=now, error=None, error_detail=None, retry_at=None)
         self._check_alerts(now)
         return samples
 
