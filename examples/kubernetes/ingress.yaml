@@ -8,8 +8,11 @@ kind: Ingress
 metadata:
   name: clstats
   namespace: clstats
-  # annotations:
-  #   cert-manager.io/cluster-issuer: letsencrypt
+  annotations:
+    # ingress-nginx allows only 1m by default; the token script sends all rows still in
+    # Claude Code's logs, which outgrows that with heavy use. Other controllers ignore it.
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # cert-manager.io/cluster-issuer: letsencrypt
 spec:
   # ingressClassName: traefik    # k3s default; nginx for ingress-nginx
   tls:

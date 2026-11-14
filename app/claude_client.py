@@ -90,12 +90,16 @@ def parse_usage(payload: dict) -> list[Reading]:
         label = LABELS.get(key, key.replace("_", " ").capitalize())
         readings.append(Reading(key, label, float(util), parse_time(value.get("resets_at"))))
 
-    for entry in payload.get("limits") or []:
+    # The payload can also come from /api/ingest, so nothing about its shape is guaranteed.
+    limits = payload.get("limits")
+    for entry in limits if isinstance(limits, list) else []:
         if not isinstance(entry, dict):
             continue
-        model = ((entry.get("scope") or {}).get("model") or {}).get("display_name")
+        scope = entry.get("scope")
+        model = scope.get("model") if isinstance(scope, dict) else None
+        model = model.get("display_name") if isinstance(model, dict) else None
         percent = entry.get("percent")
-        if not model or not isinstance(percent, (int, float)):
+        if not isinstance(model, str) or not model or not isinstance(percent, (int, float)):
             continue
         readings.append(
             Reading(f"model:{model}", f"Woche {model}", float(percent), parse_time(entry.get("resets_at")))
@@ -126,6 +130,17 @@ class ClaudeClient:
         self.cookie = normalize_cookie(cookie)
         self.timeout = timeout
         self.session = httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=False)
+
+    def close(self) -> None:
+        # A client is made per polling round; closing it frees its connection pool and
+        # sockets instead of leaving that to the garbage collector.
+        self.session.close()
+
+    def __enter__(self) -> ClaudeClient:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
 
     def _get(self, path: str) -> dict:
         resp = self.session.get(

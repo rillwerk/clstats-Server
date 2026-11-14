@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Sum up Claude Code token usage per project, model and day and send it to the usage server.
 
-Reads the session logs Claude Code writes on this Mac (~/.claude/projects/**/*.jsonl),
-only the token counters, never message contents. Only the totals leave the Mac.
+Reads the session logs Claude Code writes on this computer (~/.claude/projects/**/*.jsonl).
+Locally it uses the token counters plus the working directory and the paths in tool calls
+(file paths, cd targets) to tell which project a message belongs to; message texts are
+ignored. Only totals per 15-minute slot, project name and model name leave the computer,
+together with the computer's name (SOURCE_NAME).
 
 Config: ~/.config/claude-usage/config with SERVER_URL=... and API_TOKEN=...
 (install.sh writes it), or the same names as environment variables. Behind Cloudflare
@@ -15,6 +18,7 @@ Access also CF_ACCESS_CLIENT_ID=... and CF_ACCESS_CLIENT_SECRET=... (service tok
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -22,6 +26,7 @@ import socket
 import ssl
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import defaultdict
 from datetime import datetime
@@ -383,8 +388,31 @@ def machine_name() -> str:
     return socket.gethostname().split(".")[0]
 
 
+LOCAL_SUFFIXES = (".localhost", ".local", ".lan", ".home.arpa", ".internal")
+
+
+def unencrypted_public(url: str) -> bool:
+    """True for an http:// address outside this machine and the local network: the token
+    and the totals would cross the internet in plain text."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme.lower() != "http":
+        return False
+    host = (parts.hostname or "").lower()
+    if not host or host == "localhost" or host.endswith(LOCAL_SUFFIXES) or "." not in host.strip("[]"):
+        return False  # single-label names (e.g. "nas") only resolve in the local network
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # a public DNS name
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local)
+
+
 def send(rows: list[dict], cfg: dict[str, str]) -> None:
     url = cfg["SERVER_URL"].rstrip("/") + "/api/tokens"
+    if unencrypted_public(url):
+        # Still sent (the user chose this address), but say so on every run.
+        print(f"Warning: {cfg['SERVER_URL']} uses http:// over the internet; the token is sent "
+              "unencrypted. Use https://.", file=sys.stderr)
     source = cfg.get("SOURCE_NAME") or machine_name()
     payload: dict = {"source": source, "rows": rows}
     if rows:

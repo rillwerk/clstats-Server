@@ -438,3 +438,190 @@ def test_org_id_must_be_a_uuid(tmp_path):
     assert bad.status_code == 422
     with pytest.raises(Exception, match="unexpected format"):
         ClaudeClient("sessionKey=x").usage("../../etc")
+
+
+# --- review fixes ---
+
+
+def test_token_date_must_be_a_real_day(setup):
+    client, _ = setup
+    row = {"date": "2026-99-99", "project": "p", "model": "claude-opus-5-5", "input": 1}
+    assert client.post("/api/tokens", json={"source": "mac", "rows": [row]}).status_code == 422
+    assert client.post("/api/tokens", json={"source": "mac", "rows": [{**row, "date": "2026-02-30"}]}).status_code == 422
+
+
+def test_stored_impossible_date_is_skipped(setup):
+    """Databases from before the date check may hold such rows: skip them instead of a 500."""
+    from datetime import date
+
+    from app.tokens import TokenRow
+
+    client, collector = setup
+    now = time.time()
+    slot = int(now - 3600) // 900 * 900
+    today = date.today().isoformat()
+    collector.db.upsert_tokens([
+        TokenRow("mac", "2026-99-99", "bad", "claude-opus-5-5", 5, 0, 0, 0, 0, 1, slot_start=slot),
+        TokenRow("mac", "9999-99-99", "bad", "claude-opus-5-5", 5, 0, 0, 0, 0, 1),
+        TokenRow("mac", today, "good", "claude-opus-5-5", 7, 0, 0, 0, 0, 1, slot_start=slot),
+    ], now)
+    for params in ({"days": 30}, {"days": 400}, {"hours": 24}):
+        r = client.get("/api/tokens", params=params)
+        assert r.status_code == 200
+        assert [p["project"] for p in r.json()["projects"]] == ["good"]
+
+
+def test_replace_from_is_bounded_by_the_report(setup):
+    """replace_from=0 must not wipe a source: only slots from the report's oldest one on go."""
+    from datetime import datetime
+
+    client, collector = setup
+    now = time.time()
+    row = lambda ts, p, n: {"date": datetime.fromtimestamp(ts).date().isoformat(), "slot_start": ts,
+                            "project": p, "model": "claude-opus-4-8", "input": n, "messages": 1}
+    old, s1 = int(now - 30 * 86400) // 900 * 900, int(now - 3600) // 900 * 900
+    client.post("/api/tokens", json={"source": "mac", "rows": [row(old, "Alt", 5), row(s1, "A", 1)]})
+    client.post("/api/tokens", json={"source": "mac", "rows": [row(s1, "B", 2)], "replace_from": 0})
+    totals = lambda: {p["project"]: p["input"] for p in client.get("/api/tokens", params={"days": 60}).json()["projects"]}
+    assert totals() == {"Alt": 5, "B": 2}
+    # A report without slot rows replaces nothing.
+    client.post("/api/tokens", json={"source": "mac", "rows": [], "replace_from": 0})
+    assert totals() == {"Alt": 5, "B": 2}
+    # Never more than 400 days back, even when the report itself reaches further.
+    from app.tokens import TokenRow
+    db = collector.db
+    ancient, older = int(now - 500 * 86400) // 900 * 900, int(now - 450 * 86400) // 900 * 900
+    db.upsert_tokens([TokenRow("mac", "2025-01-01", "Uralt", "m", 3, 0, 0, 0, 0, 1, slot_start=older)], now)
+    db.upsert_tokens([TokenRow("mac", "2025-01-01", "X", "m", 1, 0, 0, 0, 0, 1, slot_start=ancient)], now,
+                     replace_from=ancient)
+    assert "Uralt" in {r.project for r in db.token_rows()}
+
+
+def test_chart_js_is_served_locally(tmp_path):
+    client = _app(tmp_path)
+    page = client.get("/")
+    assert '<script src="/static/chart.umd.min.js"></script>' in page.text
+    assert "cdnjs" not in page.text and "cdnjs" not in page.headers["content-security-policy"]
+    assert "script-src 'self' 'sha256-" in page.headers["content-security-policy"]
+    js = client.get("/static/chart.umd.min.js")  # public like the page itself
+    assert js.status_code == 200
+    assert "javascript" in js.headers["content-type"]
+    assert "Chart.js v4.4.1" in js.text[:200] and "MIT" in js.text[:200]
+
+
+def test_api_docs_are_off(tmp_path):
+    client = _app(tmp_path)
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert client.get(path).status_code == 404
+
+
+def test_token_is_checked_before_the_body(tmp_path):
+    client = _app(tmp_path, ingest_token="ingest-only")
+    bad_json = {"content": b"{not json", "headers": {"Content-Type": "application/json"}}
+    r = client.post("/api/tokens", **bad_json)
+    assert r.status_code == 401 and r.json() == {"detail": "invalid token"}
+    # Middleware answers carry the same security headers as everything else.
+    assert r.headers["x-content-type-options"] == "nosniff" and r.headers["x-frame-options"] == "DENY"
+    assert client.post("/api/credentials", **bad_json).status_code == 401
+    # With a valid token the body is checked as before.
+    ok = {"Authorization": "Bearer t0ken", "Content-Type": "application/json"}
+    assert client.post("/api/tokens", content=b"{not json", headers=ok).status_code == 422
+    assert client.post("/api/tokens", content=b"{not json",
+                       headers={**ok, "Authorization": "Bearer ingest-only"}).status_code == 422
+    # Oversized bodies are refused from the header alone.
+    huge = {**ok, "Content-Length": str(17 * 1024 * 1024)}
+    assert client.post("/api/tokens", content=b"{}", headers=huge).status_code == 413
+
+
+def test_failed_tokens_are_counted_once(tmp_path):
+    client = _app(tmp_path)
+    body = {"source": "mac", "rows": []}
+    for _ in range(10):
+        assert client.post("/api/tokens", json=body, headers={"Authorization": "Bearer wrong"}).status_code == 401
+    r = client.post("/api/tokens", json=body, headers={"Authorization": "Bearer wrong"})
+    assert r.status_code == 429 and r.json()["detail"].startswith("too many")
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert client.post("/api/tokens", json=body, headers={"Authorization": "Bearer t0ken"}).status_code == 200
+
+
+def test_cookie_must_be_printable_ascii(setup):
+    client, _ = setup
+    for cookie in ("sessionKey=abc\r\nX-Evil: 1", "sessionKey=abc\tdef", "sessionKey=äöü-test"):
+        assert client.post("/api/credentials", json={"cookie": cookie}).status_code == 422
+
+
+def test_unexpected_errors_do_not_leak_the_cookie(setup, caplog):
+    import httpx
+
+    client, collector = setup
+    collector.set_cookie("sessionKey=sk-ant-secret")
+    FakeClient.fail = httpx.LocalProtocolError("Illegal header value b'sessionKey=sk-ant-secret'")
+    collector.run_once()
+    status = client.get("/api/current").json()["status"]
+    assert status["error"] == "fetch_failed" and status["error_detail"] == "LocalProtocolError"
+    assert "sk-ant-secret" not in caplog.text
+    FakeClient.fail = None
+
+
+def test_ingest_rejects_non_objects(setup):
+    client, _ = setup
+    assert client.post("/api/ingest", json=[1, 2]).status_code == 422
+    assert client.post("/api/ingest", json={"usage": "x"}).status_code == 422
+    assert client.post("/api/ingest", json={"usage": {"limits": "x"}}).status_code == 422
+    assert parse_usage({"limits": {"a": 1}}) == []
+    assert parse_usage({"limits": [{"scope": "x", "percent": 1}, {"scope": {"model": "y"}, "percent": 1}]}) == []
+
+
+def test_parallel_runs_poll_once(tmp_path):
+    import threading
+
+    settings = Settings(api_token="t0ken", secret_key=Fernet.generate_key().decode(), data_dir=tmp_path)
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    class SlowClient(FakeClient):
+        def usage(self, org):
+            calls.append(org)
+            started.set()
+            release.wait(5)
+            return USAGE
+
+    collector = Collector(settings, Database(settings.db_path), None, SlowClient)
+    collector.set_cookie("sessionKey=sk-ant-test")
+    results = []
+    first = threading.Thread(target=lambda: results.append(collector.run_once()))
+    first.start()
+    started.wait(5)
+    second = threading.Thread(target=lambda: results.append(collector.run_once()))
+    second.start()
+    time.sleep(0.1)
+    release.set()
+    first.join(5); second.join(5)
+    assert len(calls) == 1 and len(results) == 2 and results[0] is results[1]
+    # After a new login the next caller polls again instead of reusing the old round.
+    collector.set_cookie("sessionKey=sk-ant-other")
+    collector.run_once()
+    assert len(calls) == 2
+
+
+def test_client_is_closed_and_org_id_saved_only_after_success(tmp_path):
+    settings = Settings(api_token="t0ken", secret_key=Fernet.generate_key().decode(), data_dir=tmp_path)
+    closed = []
+
+    class ClosingClient(FakeClient):
+        def close(self):
+            closed.append(True)
+
+    collector = Collector(settings, Database(settings.db_path), None, ClosingClient)
+    collector.set_cookie("sessionKey=sk-ant-test")
+    FakeClient.fail = SessionExpired("401")
+    collector.run_once()
+    assert collector.db.get("org_id") is None and closed == [True]
+    FakeClient.fail = None
+    collector.run_once()
+    assert collector.db.get("org_id") == "org-1" and closed == [True, True]
+    # The real client closes its connection pool.
+    c = ClaudeClient("sessionKey=x")
+    with c:
+        pass
+    assert c.session.is_closed

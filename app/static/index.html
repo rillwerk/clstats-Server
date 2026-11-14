@@ -1,20 +1,24 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ClStats Server</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23E08A6C'/%3E%3Cstop offset='1' stop-color='%23C15F3C'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Ccircle cx='32' cy='32' r='17' fill='none' stroke='%23fff' stroke-opacity='.3' stroke-width='6'/%3E%3Ccircle cx='32' cy='32' r='17' fill='none' stroke='%23fff' stroke-width='6' stroke-linecap='round' stroke-dasharray='74.8 106.8' transform='rotate(-90 32 32)'/%3E%3C/svg%3E">
+<script src="/static/chart.umd.min.js"></script>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%232EC4B0'/%3E%3Cstop offset='1' stop-color='%230B8276'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Ccircle cx='32' cy='32' r='17' fill='none' stroke='%23fff' stroke-opacity='.3' stroke-width='6'/%3E%3Ccircle cx='32' cy='32' r='17' fill='none' stroke='%23fff' stroke-width='6' stroke-linecap='round' stroke-dasharray='74.8 106.8' transform='rotate(-90 32 32)'/%3E%3C/svg%3E">
 <meta name="theme-color" content="#FAF9F5" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#262624" media="(prefers-color-scheme: dark)">
 <style>
+  /* Teal like the app. --accent/--warn/--bad fill bars, charts and buttons; the *-ink
+     variants are for text, so text keeps at least 4.5:1 against its background. */
   :root { color-scheme: light dark;
           --bg:#FAF9F5; --card:#fff; --text:#1f1e1d; --muted:#6f6b64; --line:#ebe8e0; --track:#efe9e2;
-          --accent:#D97757; --warn:#E0662A; --bad:#C8382B; --radius:16px; }
+          --accent:#0B8276; --warn:#B84F1A; --bad:#C8382B; --on-accent:#fff;
+          --accent-ink:#08695F; --warn-ink:#9A4115; --bad-ink:#A82E23; --radius:16px; }
   @media (prefers-color-scheme: dark) {
     :root { --bg:#262624; --card:#30302e; --text:#ece9e2; --muted:#a19d95; --line:#3d3d3a; --track:#45403b;
-            --accent:#E08A6C; --warn:#F07A3E; --bad:#E5534B; }
+            --accent:#2EC4B0; --warn:#F07A3E; --bad:#E5534B; --on-accent:#10201E;
+            --accent-ink:#2EC4B0; --warn-ink:#F5935F; --bad-ink:#F28C85; }
   }
   * { box-sizing: border-box; }
   body { margin:0; font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--text);
@@ -33,56 +37,85 @@
   .bar > b { position:absolute; top:-3px; width:2px; height:12px; border-radius:1px; background:var(--text); opacity:.45; }
   .big { font-size:24px; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-.02em; line-height:1.1; }
   .pill { font-size:11px; font-weight:600; padding:1px 7px; border-radius:10px; }
-  .ok { color:var(--accent); background:color-mix(in srgb, var(--accent) 15%, transparent); }
-  .tight { color:var(--warn); background:color-mix(in srgb, var(--warn) 15%, transparent); }
-  .limit_before_reset, .limit_reached { color:var(--bad); background:color-mix(in srgb, var(--bad) 15%, transparent); }
-  .idle { color:var(--muted); background:var(--track); }
-  .heat { display:grid; grid-template-columns:24px repeat(24, 1fr); gap:2px; font-size:10px; }
+  .ok { color:var(--accent-ink); background:color-mix(in srgb, var(--accent) 15%, transparent); }
+  .tight { color:var(--warn-ink); background:color-mix(in srgb, var(--warn) 15%, transparent); }
+  .limit_before_reset, .limit_reached { color:var(--bad-ink); background:color-mix(in srgb, var(--bad) 15%, transparent); }
+  .idle { color:var(--muted); box-shadow:inset 0 0 0 1px var(--line); }
+  .heat { display:grid; grid-template-columns:28px repeat(24, 1fr); gap:2px; font-size:10px; }
   .heat div { aspect-ratio:1; border-radius:3px; }
   .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
   #summary .row { padding:3px 0; border-bottom:1px solid var(--line); } #summary .row:last-child { border:0; }
   #summary b { font-variant-numeric:tabular-nums; }
   select, input, button { font:inherit; font-size:13px; padding:5px 10px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); }
-  button { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
-  a { color:var(--accent); }
+  button { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; cursor:pointer; }
+  a { color:var(--accent-ink); }
   #login { display:none; }
 </style>
 </head>
 <body>
 <main>
-  <header><h1>ClStats Server</h1><div class="muted" id="updated">Lade…</div></header>
+  <header><h1>ClStats Server</h1><div class="muted" id="updated" data-i18n="loading">Loading…</div></header>
 
   <div class="card" id="login" style="margin-top:10px">
-    <h2>Zugangs-Token</h2>
-    <div class="row"><input id="token" type="password" placeholder="API_TOKEN aus der .env" style="flex:1"><button id="save">Speichern</button></div>
+    <h2 data-i18n="tokenTitle">Access token</h2>
+    <div class="row"><input id="token" type="password" placeholder="API_TOKEN from .env" data-i18n-placeholder="tokenPlaceholder" style="flex:1"><button id="save" data-i18n="save">Save</button></div>
   </div>
 
   <div class="grid" id="limits"></div>
 
   <div class="card" style="margin-top:10px">
     <div class="row" style="justify-content:space-between">
-      <h2>Verlauf</h2>
+      <h2 data-i18n="history">History</h2>
       <div class="row">
-        <select id="hkey"><option value="five_hour">Session</option><option value="seven_day">Woche</option></select>
-        <select id="hrange"><option value="24">24 h</option><option value="168">7 Tage</option><option value="720">30 Tage</option><option value="2160">90 Tage</option></select>
+        <select id="hkey"><option value="five_hour" data-i18n="session">Session</option><option value="seven_day" data-i18n="week">Week</option></select>
+        <select id="hrange"><option value="24">24 h</option><option value="168" data-i18n="d7">7 days</option><option value="720" data-i18n="d30">30 days</option><option value="2160" data-i18n="d90">90 days</option></select>
       </div>
     </div>
     <canvas id="history" height="110"></canvas>
   </div>
 
   <div class="grid">
-    <div class="card"><h2>Wochenverbrauch pro Tag (30 Tage)</h2><canvas id="daily" height="160"></canvas></div>
-    <div class="card"><h2>Zusammenfassung (30 Tage)</h2><div id="summary"></div></div>
+    <div class="card"><h2 data-i18n="dailyTitle">Weekly usage per day (30 days)</h2><canvas id="daily" height="160"></canvas></div>
+    <div class="card"><h2 data-i18n="summaryTitle">Summary (30 days)</h2><div id="summary"></div></div>
   </div>
 
   <div class="card" style="margin-top:10px">
-    <h2>Wann du Claude nutzt (Session-Verbrauch, 4 Wochen)</h2>
+    <h2 data-i18n="heatTitle">When you use Claude (session usage, 4 weeks)</h2>
     <div class="heat" id="heat"></div>
   </div>
-  <p class="muted"><a href="#" id="csv">CSV exportieren</a></p>
+  <p class="muted"><a href="#" id="csv" data-i18n="csv">Export CSV</a></p>
 </main>
 <script>
 const $ = id => document.getElementById(id);
+// German for browsers set to German, English otherwise. The page's static text is English;
+// [data-i18n] elements are filled from this dictionary. Limit names come from the server.
+const LANG = (navigator.language || '').toLowerCase().startsWith('de') ? 'de' : 'en';
+const LOCALE = LANG === 'de' ? 'de-DE' : (/^en\b/i.test(navigator.language || '') ? navigator.language : 'en-US');
+const TEXT = {
+  de: { loading:'Lade…', tokenTitle:'Zugangs-Token', tokenPlaceholder:'API_TOKEN aus der .env', save:'Speichern',
+        history:'Verlauf', session:'Session', week:'Woche', d7:'7 Tage', d30:'30 Tage', d90:'90 Tage',
+        dailyTitle:'Wochenverbrauch pro Tag (30 Tage)', summaryTitle:'Zusammenfassung (30 Tage)',
+        heatTitle:'Wann du Claude nutzt (Session-Verbrauch, 4 Wochen)', csv:'CSV exportieren',
+        asOf:'Stand ', noData:'Noch keine Daten', error:'Fehler: ', reset:'Reset ', noWindow:'kein aktives Fenster',
+        limitEta:'Limit ca. ', perHour:' %/h',
+        ok:'reicht', tight:'knapp', limit_before_reset:'Limit vor Reset', limit_reached:'Limit erreicht', idle:'inaktiv',
+        sessions:'Sessions', hitLimit:'Davon am Limit', avgPeak:'Ø Session-Spitze', activeDays:'Aktive Tage',
+        avgPerDay:'Ø Wochenverbrauch je aktivem Tag', busiest:'Stärkster Tag',
+        weekdays:['Mo','Di','Mi','Do','Fr','Sa','So'], csvFailed:'CSV-Export fehlgeschlagen (Fehler {0}).' },
+  en: { loading:'Loading…', tokenTitle:'Access token', tokenPlaceholder:'API_TOKEN from .env', save:'Save',
+        history:'History', session:'Session', week:'Week', d7:'7 days', d30:'30 days', d90:'90 days',
+        dailyTitle:'Weekly usage per day (30 days)', summaryTitle:'Summary (30 days)',
+        heatTitle:'When you use Claude (session usage, 4 weeks)', csv:'Export CSV',
+        asOf:'Updated ', noData:'No data yet', error:'Error: ', reset:'Resets ', noWindow:'no active window',
+        limitEta:'limit around ', perHour:'%/h',
+        ok:'on track', tight:'tight', limit_before_reset:'limit before reset', limit_reached:'limit reached', idle:'idle',
+        sessions:'Sessions', hitLimit:'Reached the limit', avgPeak:'Avg. session peak', activeDays:'Active days',
+        avgPerDay:'Avg. weekly usage per active day', busiest:'Busiest day',
+        weekdays:['Mon','Tue','Wed','Thu','Fri','Sat','Sun'], csvFailed:'CSV export failed (error {0}).' },
+}[LANG];
+document.documentElement.lang = LANG;
+document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = TEXT[el.dataset.i18n]; });
+document.querySelectorAll('[data-i18n-placeholder]').forEach(el => { el.placeholder = TEXT[el.dataset.i18nPlaceholder]; });
 // Everything from the server is escaped before it goes into innerHTML (limit names come
 // from claude.ai or /api/ingest).
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
@@ -91,8 +124,11 @@ const store = { get(){ try { return localStorage.getItem('token') || ''; } catch
                 set(v){ try { localStorage.setItem('token', v); } catch {} } };
 let token = store.get();
 const charts = {};
-const fmtTime = ts => new Date(ts * 1000).toLocaleString('de-DE', { weekday:'short', hour:'2-digit', minute:'2-digit' });
-const statusText = { ok:'reicht', tight:'knapp', limit_before_reset:'Limit vor Reset', limit_reached:'Limit erreicht', idle:'inaktiv' };
+const fmtTime = ts => new Date(ts * 1000).toLocaleString(LOCALE, { weekday:'short', hour:'2-digit', minute:'2-digit' });
+// Dates from the server are calendar days (YYYY-MM-DD); format them without a time zone shift.
+const fmtDay = (d, opts) => new Date(d + 'T00:00:00Z').toLocaleDateString(LOCALE, { timeZone:'UTC', ...opts });
+const pct = v => LANG === 'de' ? v + ' %' : v + '%';
+const decimal = v => Number(v).toLocaleString(LOCALE, { minimumFractionDigits:1, maximumFractionDigits:1 });
 
 async function api(path) {
   const r = await fetch(path, { headers: { Authorization: 'Bearer ' + token } });
@@ -120,17 +156,17 @@ function chart(id, cfg) {
 async function loadCurrent() {
   const c = await api('/api/current');
   const st = c.status;
-  $('updated').textContent = (c.updated_at ? 'Stand ' + fmtTime(c.updated_at) : 'Noch keine Daten')
-    + (st.error ? ' · Fehler: ' + (st.error_detail || st.error) : '');
+  $('updated').textContent = (c.updated_at ? TEXT.asOf + fmtTime(c.updated_at) : TEXT.noData)
+    + (st.error ? ' · ' + TEXT.error + (st.error_detail || st.error) : '');
   $('limits').innerHTML = c.limits.map(l => `
     <div class="card">
       <div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(l.label)}</h2>
-        <span class="pill ${esc(l.status)}">${esc(statusText[l.status] || l.status)}</span></div>
-      <div class="big">${Math.round(num(l.utilization))} %</div>
+        <span class="pill ${esc(l.status)}">${esc(TEXT[l.status] || l.status)}</span></div>
+      <div class="big">${pct(Math.round(num(l.utilization)))}</div>
       <div class="bar"><i class="${level(l)}" style="width:${Math.min(100, num(l.utilization))}%"></i>${l.pace != null ? `<b style="left:${num(l.pace)}%"></b>` : ''}</div>
-      <div class="muted">${l.resets_at ? 'Reset ' + fmtTime(l.resets_at) : 'kein aktives Fenster'}
-        ${l.rate_per_hour > 0 ? ' · ' + l.rate_per_hour.toFixed(1) + ' %/h' : ''}
-        ${l.limit_eta && l.status !== 'ok' ? ' · Limit ca. ' + fmtTime(l.limit_eta) : ''}</div>
+      <div class="muted">${l.resets_at ? TEXT.reset + fmtTime(l.resets_at) : TEXT.noWindow}
+        ${l.rate_per_hour > 0 ? ' · ' + decimal(l.rate_per_hour) + TEXT.perHour : ''}
+        ${l.limit_eta && l.status !== 'ok' ? ' · ' + TEXT.limitEta + fmtTime(l.limit_eta) : ''}</div>
     </div>`).join('');
 }
 
@@ -144,18 +180,18 @@ async function loadHistory() {
 
 async function loadDaily() {
   const d = await api('/api/daily?key=seven_day&days=30');
-  chart('daily', { type:'bar', data:{ labels:d.days.map(x => x.date.slice(5)),
+  chart('daily', { type:'bar', data:{ labels:d.days.map(x => fmtDay(x.date, { day:'2-digit', month:'2-digit' })),
     datasets:[{ data:d.days.map(x => x.consumed), backgroundColor:css('--accent'), borderRadius:3, maxBarThickness:18 }] } });
 }
 
 async function loadSummary() {
   const s = await api('/api/summary?days=30');
   const rows = [
-    ['Sessions', s.sessions], ['Davon am Limit', s.sessions_hit_limit],
-    ['Ø Session-Spitze', s.avg_session_peak != null ? s.avg_session_peak + ' %' : '–'],
-    ['Aktive Tage', s.active_days],
-    ['Ø Wochenverbrauch je aktivem Tag', s.avg_weekly_per_active_day != null ? s.avg_weekly_per_active_day + ' %' : '–'],
-    ['Stärkster Tag', s.busiest_day ? `${s.busiest_day.date} (${s.busiest_day.consumed} %)` : '–'],
+    [TEXT.sessions, s.sessions], [TEXT.hitLimit, s.sessions_hit_limit],
+    [TEXT.avgPeak, s.avg_session_peak != null ? pct(s.avg_session_peak) : '–'],
+    [TEXT.activeDays, s.active_days],
+    [TEXT.avgPerDay, s.avg_weekly_per_active_day != null ? pct(s.avg_weekly_per_active_day) : '–'],
+    [TEXT.busiest, s.busiest_day ? `${fmtDay(s.busiest_day.date, { dateStyle:'medium' })} (${pct(s.busiest_day.consumed)})` : '–'],
   ];
   $('summary').innerHTML = rows.map(([k, v]) => `<div class="row" style="justify-content:space-between"><span class="muted">${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
 }
@@ -164,13 +200,13 @@ async function loadHeat() {
   const h = await api('/api/heatmap?key=five_hour&days=28');
   const max = Math.max(1, ...h.cells.map(c => c.consumed));
   const val = {}; h.cells.forEach(c => val[c.weekday + ':' + c.hour] = c.consumed);
-  const days = ['Mo','Di','Mi','Do','Fr','Sa','So'];
+  const days = TEXT.weekdays;
   let html = '<span></span>' + Array.from({ length:24 }, (_, i) => `<span class="muted">${i % 3 ? '' : i}</span>`).join('');
   days.forEach((d, w) => {
     html += `<span class="muted">${d}</span>`;
     for (let hr = 0; hr < 24; hr++) {
       const v = val[w + ':' + hr] || 0;
-      html += `<div title="${d} ${hr}:00 – ${v.toFixed(1)} %" style="background:${v ? css('--accent') : css('--track')};opacity:${v ? .25 + .75 * v / max : 1}"></div>`;
+      html += `<div title="${d} ${hr}:00 – ${pct(decimal(v))}" style="background:${v ? css('--accent') : css('--track')};opacity:${v ? .25 + .75 * v / max : 1}"></div>`;
     }
   });
   $('heat').innerHTML = html;
@@ -190,7 +226,7 @@ $('csv').onclick = async e => {
   e.preventDefault();
   const r = await fetch('/api/export.csv', { headers: { Authorization: 'Bearer ' + token } });
   if (r.status === 401) { $('login').style.display = 'block'; return; }
-  if (!r.ok) { alert('CSV-Export fehlgeschlagen (Fehler ' + r.status + ').'); return; }
+  if (!r.ok) { alert(TEXT.csvFailed.replace('{0}', r.status)); return; }
   const url = URL.createObjectURL(await r.blob());
   const a = Object.assign(document.createElement('a'), { href: url, download: 'claude-usage.csv' });
   document.body.appendChild(a); a.click(); a.remove();

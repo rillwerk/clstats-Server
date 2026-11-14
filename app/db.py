@@ -9,6 +9,9 @@ from pathlib import Path
 
 from .tokens import TokenRow
 
+# replace_from never reaches further back than this: the oldest data the dashboard shows.
+MAX_REPLACE_AGE = 400 * 86400
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
@@ -186,15 +189,20 @@ class Database:
 
         With replace_from the report is complete from that slot on: the reporting source's
         slot rows there are replaced instead of merged, so rows under an old project name
-        do not linger next to the new ones."""
+        do not linger next to the new ones. It never reaches below the oldest slot the report
+        itself contains (and does nothing for a report without slots) nor more than 400 days
+        back: a report can only replace what it brings along, so replace_from=0 cannot wipe
+        a source's history."""
         slots = [r for r in rows if r.slot_start is not None]
         days = [r for r in rows if r.slot_start is None]
         counts = lambda r: (r.input, r.output, r.cache_write, r.cache_write_1h, r.cache_read, r.messages)
         with self._lock, self._conn:
             if replace_from is not None:
-                for source in {r.source for r in rows}:
+                for source in {r.source for r in slots}:
+                    oldest = min(r.slot_start for r in slots if r.source == source)
+                    floor = max(replace_from, oldest, int(now) - MAX_REPLACE_AGE)
                     self._conn.execute(
-                        "DELETE FROM token_slots WHERE source = ? AND slot_start >= ?", (source, replace_from)
+                        "DELETE FROM token_slots WHERE source = ? AND slot_start >= ?", (source, floor)
                     )
             if days:
                 self._conn.executemany(

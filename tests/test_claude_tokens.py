@@ -96,3 +96,22 @@ def test_home_paths_are_expanded(ct, tmp_path, monkeypatch):
         _assistant(0, str(ct.root), [("Bash", {"command": "ls ~/Projects/alpha/src"})]),
     ])
     assert projects == ["alpha"]
+
+
+def test_warns_about_plain_http_over_the_internet(ct, monkeypatch, capsys):
+    for url in ("http://localhost:8080", "http://127.0.0.1:8080", "http://192.168.1.10:8080",
+                "http://nas:8080", "http://unraid.local", "http://[::1]:8080", "https://clstats.example.com"):
+        assert not ct.unencrypted_public(url), url
+    for url in ("http://clstats.example.com", "http://1.1.1.1:8080", "HTTP://Example.org"):
+        assert ct.unencrypted_public(url), url
+
+    class Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def read(self): return b'{"ok":true}'
+
+    monkeypatch.setattr(ct.urllib.request, "urlopen", lambda *a, **k: Resp())
+    ct.send([], {"SERVER_URL": "http://clstats.example.com", "API_TOKEN": "x"})
+    assert "http://" in capsys.readouterr().err  # warned, but still sent
+    ct.send([], {"SERVER_URL": "https://clstats.example.com", "API_TOKEN": "x"})
+    assert capsys.readouterr().err == ""

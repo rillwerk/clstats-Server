@@ -14,7 +14,7 @@ PY="${PYTHON:-$(command -v python3 || true)}"
 MARK="# claude-usage-tokens"
 
 if [ -z "$PY" ]; then
-    echo "python3 fehlt." >&2
+    echo "python3 not found." >&2
     exit 1
 fi
 
@@ -61,7 +61,7 @@ else
     echo $! > "$APP_DIR/loop.pid"
     echo "No cron found: started a background loop (PID $(cat "$APP_DIR/loop.pid"))."
     echo "It runs until the container restarts; run this command again afterwards"
-    echo "oder ihn in den Startbefehl des Containers aufnehmen."
+    echo "or add it to the container's start command."
 fi
 $PY "$APP_DIR/claude_tokens.py" >> "$LOG" 2>&1 || true
 tail -1 "$LOG"

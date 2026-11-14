@@ -9,6 +9,7 @@ import time
 from collections import defaultdict
 from typing import Callable
 
+import httpx
 from cryptography.fernet import Fernet, InvalidToken
 
 from . import analytics
@@ -40,6 +41,12 @@ class Collector:
         # After a 429 from claude.ai: no requests before _pause_until, the wait doubles per 429.
         self._pause_until = 0.0
         self._backoff = 0.0
+        # One polling round at a time (collector thread, /api/refresh, /api/credentials).
+        # A caller that finds a round running waits for it and takes its result; it only
+        # polls again if the login changed meanwhile (_generation counts set_cookie calls).
+        self._run_lock = threading.Lock()
+        self._generation = 0
+        self._last_run: tuple[int, list[Sample]] | None = None
 
     # credentials
 
@@ -48,6 +55,7 @@ class Collector:
         self.db.set("org_id", org_id)
         self.db.set("session_alerted", None)
         self._pause_until = self._backoff = 0.0
+        self._generation += 1
         self._wake.set()
 
     def clear_cookie(self) -> None:
@@ -82,6 +90,20 @@ class Collector:
     # polling
 
     def run_once(self, now: float | None = None) -> list[Sample]:
+        waited = not self._run_lock.acquire(blocking=False)
+        if waited:
+            self._run_lock.acquire()
+        try:
+            if waited and self._last_run and self._last_run[0] == self._generation:
+                return self._last_run[1]
+            generation = self._generation
+            result = self._run_once(now)
+            self._last_run = (generation, result)
+            return result
+        finally:
+            self._run_lock.release()
+
+    def _run_once(self, now: float | None) -> list[Sample]:
         now = now or time.time()
         cookie = self.cookie()
         if not cookie:
@@ -92,8 +114,10 @@ class Collector:
         client = self.client_factory(cookie)
         try:
             org = self.db.get("org_id") or client.organization_id()
-            self.db.set("org_id", org)
             readings = parse_usage(client.usage(org))
+            # Stored only once a fetch with it worked (usage() also checks the UUID form),
+            # so a wrong id is looked up again next round instead of sticking.
+            self.db.set("org_id", org)
         except SessionExpired as e:
             self._set_status(last_attempt=now, error="session_expired", error_detail=str(e))
             if self.db.get("session_alerted") is None:
@@ -110,13 +134,21 @@ class Collector:
         except Blocked as e:
             self._set_status(last_attempt=now, error="blocked", error_detail=str(e))
             return []
-        except (ClaudeError, ValueError, OSError) as e:
+        except (ClaudeError, OSError, httpx.TimeoutException, httpx.NetworkError) as e:
+            # Our own messages and network failures: they never contain request headers.
             self._set_status(last_attempt=now, error="fetch_failed", error_detail=str(e))
             return []
-        except Exception as e:  # httpx and JSON errors
-            log.exception("Fetch failed")
-            self._set_status(last_attempt=now, error="fetch_failed", error_detail=str(e))
+        except Exception as e:  # other httpx errors, JSON errors
+            # Only the type: some httpx errors quote the offending header value, i.e. the
+            # cookie ("Illegal header value b'...'"), and that must not reach the status,
+            # the app, the dashboard or the log. Hence no traceback either.
+            log.error("Fetch failed: %s", type(e).__name__)
+            self._set_status(last_attempt=now, error="fetch_failed", error_detail=type(e).__name__)
             return []
+        finally:
+            close = getattr(client, "close", None)
+            if close:
+                close()
 
         self._backoff = 0.0
         return self.store(readings, now)
