@@ -47,6 +47,8 @@ Settings in `.env`:
 | `SECRET_KEY` | Optional. Encrypts the stored claude.ai cookie. Generated on first start and kept in `data/secret.key` if empty. |
 | `TZ` | Time zone for daily statistics, default `UTC`. |
 | `POLL_INTERVAL` | Seconds between polls, default 300, minimum 60. |
+| `INGEST_TOKEN` | Optional, at least 24 characters, different from `API_TOKEN`. May only send token totals (`POST /api/tokens`); use it in the token script on other computers, see below. |
+| `FORWARDED_ALLOW_IPS` | Optional. Addresses or networks of your reverse proxy whose `X-Forwarded-For` is trusted, e.g. `172.18.0.0/16` for its Docker network. Default `127.0.0.1`. Only affects which client address appears in logs and in the lockout after wrong tokens. |
 
 The compose file publishes the port only on `127.0.0.1`. Put your reverse proxy in front
 of it, for example with Caddy (`examples/caddy/Caddyfile`):
@@ -156,6 +158,12 @@ sh scripts/install.sh uninstall
 
 Costs shown in the app are estimates at API list prices, not what your plan costs.
 
+The script's config (`~/.config/claude-usage/config`) holds a token in plain text. Rather than
+the `API_TOKEN`, give it an `INGEST_TOKEN`: set `INGEST_TOKEN=$(openssl rand -hex 32)` in the
+server's `.env`, restart the server, and put that value into the script config as
+`API_TOKEN=…`. A leaked script config can then only send token totals, not read your data or
+change the claude.ai login. Scripts that still use the `API_TOKEN` keep working.
+
 ## Push notifications
 
 Push notifications to the App Store version of ClStats need the app developer's Apple
@@ -178,7 +186,9 @@ and reports `status.error = "rate_limited"` with `retry_at`.
 
 ## API
 
-All endpoints except `/api/health` and `/privacy` need `Authorization: Bearer <API_TOKEN>`.
+All endpoints except `/api/health` and `/privacy` need `Authorization: Bearer <API_TOKEN>`
+(the token is only accepted in this header, never in the URL). `POST /api/tokens` also
+accepts the `INGEST_TOKEN`.
 
 | Endpoint | |
 |---|---|

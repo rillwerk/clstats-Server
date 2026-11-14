@@ -18,4 +18,9 @@ USER 99:100
 VOLUME /data
 EXPOSE 8080
 HEALTHCHECK --interval=60s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health')"
-CMD ["uvicorn", "app.main:app_factory", "--factory", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# X-Forwarded-For is only trusted from FORWARDED_ALLOW_IPS (comma-separated addresses or
+# networks, e.g. your reverse proxy's Docker network 172.18.0.0/16). Trusting "*" would let
+# anyone who reaches the container directly fake their address. Without a matching proxy
+# address all clients simply show up with the proxy's address, which is harmless.
+ENV FORWARDED_ALLOW_IPS=127.0.0.1
+CMD ["uvicorn", "app.main:app_factory", "--factory", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]

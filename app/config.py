@@ -24,6 +24,9 @@ class Settings:
     api_token: str
     # Fernet key used to encrypt the claude.ai cookie at rest (generated on first start if unset).
     secret_key: str
+    # Optional second token that may only send token counts (POST /api/tokens), for the token
+    # script on other machines. A leaked script config then cannot read data or change the login.
+    ingest_token: str | None = None
     data_dir: Path = Path("/data")
     poll_interval: int = 300
     timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
@@ -79,12 +82,19 @@ def load_settings() -> Settings:
             f"API_TOKEN must be set to a random string of at least {MIN_TOKEN_LENGTH} characters "
             "(e.g. `openssl rand -hex 32`, see .env.example)"
         )
+    ingest_token = _env("INGEST_TOKEN")
+    if ingest_token is not None:
+        if len(ingest_token) < MIN_TOKEN_LENGTH:
+            raise RuntimeError(f"INGEST_TOKEN must be at least {MIN_TOKEN_LENGTH} characters (or left empty)")
+        if ingest_token == api_token:
+            raise RuntimeError("INGEST_TOKEN must differ from API_TOKEN")
     data_dir = Path(_env("DATA_DIR", "/data"))
     thresholds = tuple(int(t) for t in _env("ALERT_THRESHOLDS", "50,75,90,100").split(","))
     key_path = _env("APNS_KEY_PATH")
     return Settings(
         api_token=api_token,
         secret_key=_secret_key(data_dir),
+        ingest_token=ingest_token,
         data_dir=data_dir,
         poll_interval=max(60, int(_env("POLL_INTERVAL", "300"))),
         timezone=ZoneInfo(_env("TZ", "UTC")),

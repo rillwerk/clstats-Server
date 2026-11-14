@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import csv
+import hashlib
 import io
 import logging
+import re
 import secrets
 import time
 from collections import defaultdict
@@ -27,9 +30,13 @@ STATIC = Path(__file__).parent / "static"
 MAX_POINTS = 600
 
 
+UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+
+
 class Credentials(BaseModel):
     cookie: str = Field(min_length=10)
-    org_id: str | None = None
+    # claude.ai organization ids are UUIDs; anything else would end up in the request path.
+    org_id: str | None = Field(None, pattern=UUID_PATTERN)
 
 
 class TokenRowIn(BaseModel):
@@ -104,6 +111,28 @@ class AuthFailures:
         self._all.append(now)
 
 
+def dashboard_csp() -> str:
+    """Content-Security-Policy for the HTML pages: own scripts only (the dashboard's inline
+    script by its hash) plus Chart.js from cdnjs, no framing, no foreign connections."""
+    hashes = []
+    for page in ("index.html", "privacy.html"):
+        html = (STATIC / page).read_text(encoding="utf-8")
+        for body in re.findall(r"<script>(.*?)</script>", html, flags=re.S):
+            digest = base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode()
+            hashes.append(f"'sha256-{digest}'")
+    return "; ".join([
+        "default-src 'self'",
+        "script-src 'self' https://cdnjs.cloudflare.com " + " ".join(hashes),
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "frame-ancestors 'none'",
+        "base-uri 'none'",
+        "form-action 'self'",
+        "object-src 'none'",
+    ])
+
+
 def create_app(settings: Settings | None = None, collector: Collector | None = None) -> FastAPI:
     settings = settings or load_settings()
     if collector is None:
@@ -126,17 +155,26 @@ def create_app(settings: Settings | None = None, collector: Collector | None = N
 
     failures = AuthFailures()
 
-    def auth(
-        request: Request,
-        authorization: str | None = Header(default=None),
-    ) -> None:
+    csp = dashboard_csp()
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        if response.headers.get("content-type", "").startswith("text/html"):
+            response.headers.setdefault("Content-Security-Policy", csp)
+        return response
+
+    def check_token(request: Request, authorization: str | None, accepted: tuple[str, ...]) -> None:
         # Only the Authorization header counts: a token in the URL would end up in access
         # logs (uvicorn, reverse proxy, Cloudflare) and in the browser history.
         client = request.client.host if request.client else "unknown"
         supplied = None
         if authorization and authorization.lower().startswith("bearer "):
             supplied = authorization[7:]
-        if supplied and secrets.compare_digest(supplied, settings.api_token):
+        if supplied and any(secrets.compare_digest(supplied, t) for t in accepted):
             return
         if failures.blocked(client):
             raise HTTPException(
@@ -146,6 +184,16 @@ def create_app(settings: Settings | None = None, collector: Collector | None = N
             )
         failures.add(client)
         raise HTTPException(status_code=401, detail="invalid token")
+
+    def auth(request: Request, authorization: str | None = Header(default=None)) -> None:
+        """Full access: the app, widgets and web dashboard."""
+        check_token(request, authorization, (settings.api_token,))
+
+    ingest_tokens = (settings.api_token,) + ((settings.ingest_token,) if settings.ingest_token else ())
+
+    def ingest_auth(request: Request, authorization: str | None = Header(default=None)) -> None:
+        """Only for sending token counts: API_TOKEN or the narrower INGEST_TOKEN."""
+        check_token(request, authorization, ingest_tokens)
 
     def by_key(since: float) -> dict[str, list[Sample]]:
         out: dict[str, list[Sample]] = defaultdict(list)
@@ -229,7 +277,7 @@ def create_app(settings: Settings | None = None, collector: Collector | None = N
         now = time.time()
         return analytics.summary(by_key(now - days * 86400), tz, now, days)
 
-    @app.post("/api/tokens", dependencies=[Depends(auth)])
+    @app.post("/api/tokens", dependencies=[Depends(ingest_auth)])
     def add_tokens(body: TokenReport) -> dict:
         """Totals from Claude Code's local logs, sent by mac/claude_tokens.py."""
         source = db.resolve_source(body.source)

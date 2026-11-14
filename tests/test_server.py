@@ -335,7 +335,7 @@ def test_claude_429_is_rate_limit_not_blocked():
     c = ClaudeClient("sessionKey=x; lastActiveOrg=o")
     c.session = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(RateLimited) as e:
-        c.usage("o")
+        c.usage("00000000-0000-4000-8000-000000000000")
     assert e.value.retry_after == 120
 
 
@@ -393,3 +393,48 @@ def test_tokens_by_model_detail(setup):
     assert c["cache_read"] == pytest.approx(40000 * 0.25 / 1e6)
     assert sum(c.values()) == pytest.approx(fable["cost"], abs=1e-3)
     assert tokens.cost("claude-fable-5-1", fable) == pytest.approx(fable["cost"], abs=1e-3)
+
+
+
+def _app(tmp_path, **extra):
+    settings = Settings(api_token="t0ken", secret_key=Fernet.generate_key().decode(), data_dir=tmp_path, **extra)
+    return TestClient(create_app(settings, Collector(settings, Database(settings.db_path), None, FakeClient)))
+
+
+def test_ingest_token_only_sends_token_counts(tmp_path):
+    client = _app(tmp_path, ingest_token="ingest-only")
+    ingest = {"Authorization": "Bearer ingest-only"}
+    body = {"source": "mac", "rows": [{"date": "2026-11-14", "project": "p", "model": "claude-opus-5-5", "input": 1}]}
+    assert client.post("/api/tokens", json=body, headers=ingest).status_code == 200
+    assert client.post("/api/tokens", json=body, headers={"Authorization": "Bearer t0ken"}).status_code == 200
+    # The ingest token cannot read data or touch the claude.ai login.
+    assert client.get("/api/current", headers=ingest).status_code == 401
+    assert client.get("/api/tokens", headers=ingest).status_code == 401
+    assert client.post("/api/credentials", json={"cookie": "sessionKey=sk-ant-x"}, headers=ingest).status_code == 401
+
+
+def test_without_ingest_token_only_api_token_counts(tmp_path):
+    client = _app(tmp_path)
+    body = {"source": "mac", "rows": []}
+    assert client.post("/api/tokens", json=body, headers={"Authorization": "Bearer ingest-only"}).status_code == 401
+
+
+def test_security_headers_and_csp(tmp_path):
+    client = _app(tmp_path)
+    page = client.get("/")
+    csp = page.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in csp and "'sha256-" in csp and "unsafe-inline" not in csp.split("style-src")[0]
+    assert page.headers["x-content-type-options"] == "nosniff"
+    assert page.headers["referrer-policy"] == "no-referrer"
+    api = client.get("/api/health")
+    assert api.headers["x-content-type-options"] == "nosniff"
+    assert "content-security-policy" not in api.headers
+
+
+def test_org_id_must_be_a_uuid(tmp_path):
+    client = _app(tmp_path)
+    client.headers["Authorization"] = "Bearer t0ken"
+    bad = client.post("/api/credentials", json={"cookie": "sessionKey=sk-ant-test", "org_id": "../../api/x"})
+    assert bad.status_code == 422
+    with pytest.raises(Exception, match="unexpected format"):
+        ClaudeClient("sessionKey=x").usage("../../etc")

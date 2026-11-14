@@ -6,12 +6,14 @@ find the organization id, then GET /api/organizations/{org}/usage.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
 import httpx
 
 BASE = "https://claude.ai"
+ORG_ID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 USER_AGENT = "ClaudeUsageApp/1.0 (personal usage monitor)"
 
 LABELS = {
@@ -168,4 +170,7 @@ class ClaudeClient:
         return org
 
     def usage(self, org_id: str) -> dict:
+        # The id goes into the request path; only accept the UUID form claude.ai uses.
+        if not ORG_ID.match(org_id):
+            raise ClaudeError("organization id has an unexpected format")
         return self._get(f"/api/organizations/{org_id}/usage")

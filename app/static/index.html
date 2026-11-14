@@ -83,6 +83,10 @@
 </main>
 <script>
 const $ = id => document.getElementById(id);
+// Everything from the server is escaped before it goes into innerHTML (limit names come
+// from claude.ai or /api/ingest).
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const num = v => Number.isFinite(Number(v)) ? Number(v) : 0;
 const store = { get(){ try { return localStorage.getItem('token') || ''; } catch { return ''; } },
                 set(v){ try { localStorage.setItem('token', v); } catch {} } };
 let token = store.get();
@@ -120,10 +124,10 @@ async function loadCurrent() {
     + (st.error ? ' · Fehler: ' + (st.error_detail || st.error) : '');
   $('limits').innerHTML = c.limits.map(l => `
     <div class="card">
-      <div class="row" style="justify-content:space-between"><h2 style="margin:0">${l.label}</h2>
-        <span class="pill ${l.status}">${statusText[l.status] || l.status}</span></div>
-      <div class="big">${Math.round(l.utilization)} %</div>
-      <div class="bar"><i class="${level(l)}" style="width:${Math.min(100, l.utilization)}%"></i>${l.pace != null ? `<b style="left:${l.pace}%"></b>` : ''}</div>
+      <div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(l.label)}</h2>
+        <span class="pill ${esc(l.status)}">${esc(statusText[l.status] || l.status)}</span></div>
+      <div class="big">${Math.round(num(l.utilization))} %</div>
+      <div class="bar"><i class="${level(l)}" style="width:${Math.min(100, num(l.utilization))}%"></i>${l.pace != null ? `<b style="left:${num(l.pace)}%"></b>` : ''}</div>
       <div class="muted">${l.resets_at ? 'Reset ' + fmtTime(l.resets_at) : 'kein aktives Fenster'}
         ${l.rate_per_hour > 0 ? ' · ' + l.rate_per_hour.toFixed(1) + ' %/h' : ''}
         ${l.limit_eta && l.status !== 'ok' ? ' · Limit ca. ' + fmtTime(l.limit_eta) : ''}</div>
@@ -153,7 +157,7 @@ async function loadSummary() {
     ['Ø Wochenverbrauch je aktivem Tag', s.avg_weekly_per_active_day != null ? s.avg_weekly_per_active_day + ' %' : '–'],
     ['Stärkster Tag', s.busiest_day ? `${s.busiest_day.date} (${s.busiest_day.consumed} %)` : '–'],
   ];
-  $('summary').innerHTML = rows.map(([k, v]) => `<div class="row" style="justify-content:space-between"><span class="muted">${k}</span><b>${v}</b></div>`).join('');
+  $('summary').innerHTML = rows.map(([k, v]) => `<div class="row" style="justify-content:space-between"><span class="muted">${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
 }
 
 async function loadHeat() {
