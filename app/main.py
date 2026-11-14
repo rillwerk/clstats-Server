@@ -129,10 +129,11 @@ def create_app(settings: Settings | None = None, collector: Collector | None = N
     def auth(
         request: Request,
         authorization: str | None = Header(default=None),
-        access_token: str | None = Query(default=None),
     ) -> None:
+        # Only the Authorization header counts: a token in the URL would end up in access
+        # logs (uvicorn, reverse proxy, Cloudflare) and in the browser history.
         client = request.client.host if request.client else "unknown"
-        supplied = access_token
+        supplied = None
         if authorization and authorization.lower().startswith("bearer "):
             supplied = authorization[7:]
         if supplied and secrets.compare_digest(supplied, settings.api_token):

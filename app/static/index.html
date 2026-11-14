@@ -180,7 +180,18 @@ async function loadAll() {
 
 $('save').onclick = () => { token = $('token').value.trim(); store.set(token); loadAll(); };
 $('hkey').onchange = $('hrange').onchange = () => loadHistory().catch(() => {});
-$('csv').onclick = e => { e.preventDefault(); location.href = '/api/export.csv?access_token=' + encodeURIComponent(token); };
+// Downloaded with the Authorization header and saved from a blob, so the token never
+// appears in a URL (access logs, browser history).
+$('csv').onclick = async e => {
+  e.preventDefault();
+  const r = await fetch('/api/export.csv', { headers: { Authorization: 'Bearer ' + token } });
+  if (r.status === 401) { $('login').style.display = 'block'; return; }
+  if (!r.ok) { alert('CSV-Export fehlgeschlagen (Fehler ' + r.status + ').'); return; }
+  const url = URL.createObjectURL(await r.blob());
+  const a = Object.assign(document.createElement('a'), { href: url, download: 'claude-usage.csv' });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
 loadAll();
 setInterval(() => loadCurrent().catch(() => {}), 60000);
 </script>

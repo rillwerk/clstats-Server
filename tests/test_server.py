@@ -114,7 +114,8 @@ def test_api_flow(setup):
     assert client.get("/api/history", params={"key": "five_hour"}).json()["points"]
     assert "five_hour" in client.get("/api/export.csv").text
     assert client.get("/api/summary").status_code == 200
-    assert client.get("/api/export.csv", params={"access_token": "t0ken"}, headers={"Authorization": ""}).status_code == 200
+    # The token is only accepted in the Authorization header, never in the URL (access logs).
+    assert client.get("/api/export.csv", params={"access_token": "t0ken"}, headers={"Authorization": ""}).status_code == 401
 
 
 def test_privacy_page_is_public(setup):
